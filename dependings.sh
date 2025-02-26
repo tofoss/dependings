@@ -3,7 +3,7 @@
 set -e
 
 show_help() {
-    echo "Usage: $0 [OPTIONS]"
+    echo "Usage: dependings [OPTIONS]"
     echo ""
     echo "Options:"
     echo "  --dry-run          Perform a dry run without making any changes."
@@ -12,9 +12,11 @@ show_help() {
     echo "  --help             Display this help message."
     echo ""
     echo "Description:"
-    echo "This script creates a new branch with the current timestamp, rebases all open Dependabot PRs into it,"
+    echo "Dependings creates a new branch with the current timestamp, rebases all open Dependabot PRs into it,"
     echo "pushes the branch to origin, creates a PR with a detailed message including links to the original Dependabot PRs,"
     echo "and then optionally closes the open Dependabot PRs and deletes the local branch."
+    echo ""
+    echo "Requires git and gh to be installed and configured."
 }
 
 is_merged() {
@@ -26,6 +28,12 @@ log() {
     local message=$1
     echo "[INFO] $message"
 }
+
+if ! git rev-parse --is-inside-work-tree > /dev/null 2>&1; then
+    echo "[ERROR] Dependings must be run inside a Git repository."
+    show_help;
+    exit 1
+fi
 
 timestamp=$(date +%Y%m%d%H%M%S)
 
@@ -43,7 +51,7 @@ while [[ "$#" -gt 0 ]]; do
     shift
 done
 
-log "Starting the bump dependencies script..."
+log "Starting Dependings..."
 
 branch_name="bump-deps-$timestamp"
 log "Creating new branch $branch_name"
