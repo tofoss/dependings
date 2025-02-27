@@ -99,7 +99,7 @@ done)
 log "Creating a new PR"
 
 if [ "$dry_run" = false ]; then
-    pr_output=$(gh pr create --title "Bump Dependencies - $timestamp" --body "$pr_body")
+    pr_output=$(gh pr create --title "Bump dependencies - $timestamp" --body "$pr_body")
     created_pr_url=$(echo "$pr_output" | grep -o 'https://github.com/[^ ]*')
     log "Created PR: $created_pr_url"
 fi
