@@ -2,7 +2,7 @@
 
 set -e
 
-VERSION="1.0.1"
+VERSION="1.0.2"
 
 show_help() {
     echo "Dependings v$VERSION"
@@ -105,6 +105,78 @@ handle_merge_conflicts() {
     done
 }
 
+handle_main_rebase_conflicts() {
+    log "Merge conflicts detected when rebasing origin/main"
+    
+    # Get list of conflicted files
+    conflicted_files=$(git status --porcelain | grep "^UU\|^AA\|^DD" | cut -c4-)
+    
+    if [ -z "$conflicted_files" ]; then
+        log "No conflicted files found, continuing..."
+        return 0
+    fi
+    
+    echo "Conflicted files:"
+    echo "$conflicted_files"
+    echo ""
+    echo "These conflicts occurred while trying to rebase the latest main branch changes"
+    echo "onto your dependency updates branch."
+    echo ""
+    
+    while true; do
+        echo "Choose an action:"
+        echo "1) Open conflicted files in editor and resolve manually"
+        echo "2) Skip main branch rebase (continue with current state)"
+        echo "3) Abort the entire process"
+        read -p "Enter your choice (1-3): " choice </dev/tty
+        
+        case $choice in
+            1)
+                # Open each conflicted file in editor
+                editor="${EDITOR:-vim}"
+                echo "$conflicted_files" | while IFS= read -r file; do
+                    if [ -n "$file" ]; then
+                        log "Opening $file in $editor"
+                        $editor "$file" </dev/tty >/dev/tty
+                    fi
+                done
+                
+                # After editing, stage all changes and continue rebase
+                log "Staging resolved conflicts and continuing rebase..."
+                git add .
+                if git rebase --continue; then
+                    log "Successfully rebased main branch changes"
+                    return 0
+                else
+                    log "Failed to continue rebase. There may still be unresolved conflicts."
+                    # Check if there are still conflicts
+                    remaining_conflicts=$(git status --porcelain | grep "^UU\|^AA\|^DD" | wc -l)
+                    if [ "$remaining_conflicts" -gt 0 ]; then
+                        echo "There are still unresolved conflicts. Please resolve them and try again."
+                        continue
+                    else
+                        log "No conflicts found but rebase failed for another reason."
+                        return 1
+                    fi
+                fi
+                ;;
+            2)
+                log "Skipping main branch rebase - continuing with current dependency updates"
+                git rebase --abort
+                return 1
+                ;;
+            3)
+                log "Aborting entire process"
+                git rebase --abort
+                exit 1
+                ;;
+            *)
+                echo "Invalid choice. Please enter 1, 2, or 3."
+                ;;
+        esac
+    done
+}
+
 if ! git rev-parse --is-inside-work-tree > /dev/null 2>&1; then
     echo "[ERROR] Dependings must be run inside a Git repository."
     show_help;
@@ -184,6 +256,22 @@ done <<< "$dependabot_prs"
 successful_prs=$(cat "$successful_prs_file")
 skipped_prs=$(cat "$skipped_prs_file")
 rm "$successful_prs_file" "$skipped_prs_file"
+
+log "Rebasing origin/main onto current branch"
+if [ "$dry_run" = false ]; then
+    if git rebase origin/main; then
+        log "Successfully rebased origin/main onto $bump_deps_branch"
+    else
+        # Handle merge conflicts for main branch rebase
+        if handle_main_rebase_conflicts; then
+            log "Successfully resolved main branch conflicts"
+        else
+            log "Skipped main branch rebase due to conflicts - continuing with current state"
+        fi
+    fi
+else
+    log "Dry run: would rebase origin/main onto current branch"
+fi
 
 log "Pushing the bump-deps branch to origin"
 if [ "$dry_run" = false ]; then
