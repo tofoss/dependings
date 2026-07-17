@@ -2,7 +2,7 @@
 
 set -e
 
-VERSION="1.0.2"
+VERSION="2.0.0"
 
 show_help() {
     echo "Dependings v$VERSION"
@@ -11,14 +11,20 @@ show_help() {
     echo ""
     echo "Options:"
     echo "  --dry-run          Perform a dry run without making any changes."
-    echo "  --close-prs        Close the open Dependabot PRs after creating the new PR."
-    echo "  --delete-branch    Delete the local branch after it is pushed."
+    echo "  --close-prs        Close the open Dependabot PRs after merging."
+    echo "  --no-pr            Apply changes directly to the current branch (no push, no PR)."
+    echo "  --delete-branch    Delete the staging branch after the PR is created (ignored with --no-pr)."
     echo "  --help             Display this help message."
     echo ""
     echo "Description:"
-    echo "Dependings creates a new branch with the current timestamp, rebases all open Dependabot PRs into it,"
-    echo "pushes the branch to origin, creates a PR with a detailed message including links to the original Dependabot PRs,"
-    echo "and then optionally closes the open Dependabot PRs and deletes the local branch."
+    echo "Dependings cherry-picks all open Dependabot PRs onto the current branch."
+    echo ""
+    echo "Default mode: creates a new branch with the current timestamp, cherry-picks all"
+    echo "open Dependabot PRs into it, pushes the branch to origin, and creates a PR with"
+    echo "a detailed message including links to the original Dependabot PRs."
+    echo ""
+    echo "With --no-pr: cherry-picks all Dependabot PRs directly onto the current branch"
+    echo "without pushing or creating a PR."
     echo ""
     echo "Requires git and gh to be installed and configured."
 }
@@ -33,34 +39,31 @@ log() {
     echo "[INFO] $message"
 }
 
-handle_merge_conflicts() {
-    local pr_branch=$1
-    local pr_title=$2
-    
-    log "Merge conflicts detected in $pr_branch"
-    
-    # Get list of conflicted files
+handle_cherry_pick_conflicts() {
+    local pr_title=$1
+
+    log "Merge conflicts detected while cherry-picking: $pr_title"
+
     conflicted_files=$(git status --porcelain | grep "^UU\|^AA\|^DD" | cut -c4-)
-    
+
     if [ -z "$conflicted_files" ]; then
         log "No conflicted files found, continuing..."
         return 0
     fi
-    
+
     echo "Conflicted files:"
     echo "$conflicted_files"
     echo ""
-    
+
     while true; do
         echo "Choose an action:"
         echo "1) Open conflicted files in editor and resolve manually"
         echo "2) Skip this PR and continue with others"
         echo "3) Abort the entire process"
         read -p "Enter your choice (1-3): " choice </dev/tty
-        
+
         case $choice in
             1)
-                # Open each conflicted file in editor
                 editor="${EDITOR:-vim}"
                 echo "$conflicted_files" | while IFS= read -r file; do
                     if [ -n "$file" ]; then
@@ -68,106 +71,31 @@ handle_merge_conflicts() {
                         $editor "$file" </dev/tty >/dev/tty
                     fi
                 done
-                
-                # After editing, stage all changes and continue rebase
-                log "Staging resolved conflicts and continuing rebase..."
+
+                log "Staging resolved conflicts and continuing cherry-pick..."
                 git add .
-                if git rebase --continue; then
-                    log "Rebase continued successfully"
+                if git cherry-pick --continue --no-edit; then
+                    log "Cherry-pick continued successfully"
                     return 0
                 else
-                    log "Failed to continue rebase. There may still be unresolved conflicts."
-                    # Check if there are still conflicts
                     remaining_conflicts=$(git status --porcelain | grep "^UU\|^AA\|^DD" | wc -l)
                     if [ "$remaining_conflicts" -gt 0 ]; then
                         echo "There are still unresolved conflicts. Please resolve them and try again."
                         continue
                     else
-                        log "No conflicts found but rebase failed for another reason."
+                        log "No conflicts found but cherry-pick failed for another reason."
                         return 1
                     fi
                 fi
                 ;;
             2)
                 log "Skipping PR: $pr_title"
-                git rebase --abort
+                git cherry-pick --abort
                 return 1
                 ;;
             3)
                 log "Aborting entire process"
-                git rebase --abort
-                exit 1
-                ;;
-            *)
-                echo "Invalid choice. Please enter 1, 2, or 3."
-                ;;
-        esac
-    done
-}
-
-handle_main_rebase_conflicts() {
-    log "Merge conflicts detected when rebasing origin/main"
-    
-    # Get list of conflicted files
-    conflicted_files=$(git status --porcelain | grep "^UU\|^AA\|^DD" | cut -c4-)
-    
-    if [ -z "$conflicted_files" ]; then
-        log "No conflicted files found, continuing..."
-        return 0
-    fi
-    
-    echo "Conflicted files:"
-    echo "$conflicted_files"
-    echo ""
-    echo "These conflicts occurred while trying to rebase the latest main branch changes"
-    echo "onto your dependency updates branch."
-    echo ""
-    
-    while true; do
-        echo "Choose an action:"
-        echo "1) Open conflicted files in editor and resolve manually"
-        echo "2) Skip main branch rebase (continue with current state)"
-        echo "3) Abort the entire process"
-        read -p "Enter your choice (1-3): " choice </dev/tty
-        
-        case $choice in
-            1)
-                # Open each conflicted file in editor
-                editor="${EDITOR:-vim}"
-                echo "$conflicted_files" | while IFS= read -r file; do
-                    if [ -n "$file" ]; then
-                        log "Opening $file in $editor"
-                        $editor "$file" </dev/tty >/dev/tty
-                    fi
-                done
-                
-                # After editing, stage all changes and continue rebase
-                log "Staging resolved conflicts and continuing rebase..."
-                git add .
-                if git rebase --continue; then
-                    log "Successfully rebased main branch changes"
-                    return 0
-                else
-                    log "Failed to continue rebase. There may still be unresolved conflicts."
-                    # Check if there are still conflicts
-                    remaining_conflicts=$(git status --porcelain | grep "^UU\|^AA\|^DD" | wc -l)
-                    if [ "$remaining_conflicts" -gt 0 ]; then
-                        echo "There are still unresolved conflicts. Please resolve them and try again."
-                        continue
-                    else
-                        log "No conflicts found but rebase failed for another reason."
-                        return 1
-                    fi
-                fi
-                ;;
-            2)
-                log "Skipping main branch rebase - continuing with current dependency updates"
-                git rebase --abort
-                return 1
-                ;;
-            3)
-                log "Aborting entire process"
-                git rebase --abort
+                git cherry-pick --abort
                 exit 1
                 ;;
             *)
@@ -188,28 +116,35 @@ timestamp=$(date +%Y%m%d%H%M%S)
 dry_run=false
 close_prs=false
 delete_branch=false
+no_pr=false
+
 while [[ "$#" -gt 0 ]]; do
     case $1 in
         --dry-run) dry_run=true ;;
         --close-prs) close_prs=true ;;
         --delete-branch) delete_branch=true ;;
+        --no-pr) no_pr=true ;;
         --help) show_help; exit 0 ;;
         *) echo "Unknown parameter passed: $1"; show_help; exit 1 ;;
     esac
     shift
 done
 
-log "Starting Dependings..."
-
-bump_deps_branch="bump-deps-$timestamp"
-log "Creating new branch $bump_deps_branch"
-if [ "$dry_run" = false ]; then
-    git checkout -b "$bump_deps_branch"
-fi
+log "Starting Dependings v$VERSION..."
 
 log "Fetching all branches and PRs"
 if [ "$dry_run" = false ]; then
     git fetch origin
+fi
+
+if [ "$no_pr" = false ]; then
+    bump_deps_branch="bump-deps-$timestamp"
+    log "Creating new branch $bump_deps_branch"
+    if [ "$dry_run" = false ]; then
+        git checkout -b "$bump_deps_branch"
+    fi
+else
+    log "Running in --no-pr mode: cherry-picking directly onto current branch ($(git branch --show-current))"
 fi
 
 log "Getting the list of open Dependabot PRs"
@@ -222,33 +157,48 @@ while IFS= read -r pr; do
     if [ -z "$pr" ]; then
         continue
     fi
-    
+
     pr_branch=$(echo "$pr" | jq -r '.headRefName')
     pr_title=$(echo "$pr" | jq -r '.title')
     dependabot_branch="origin/$pr_branch"
-    
+
     if is_merged "$dependabot_branch"; then
         log "Branch $dependabot_branch is already merged, skipping..."
         continue
     fi
-    
-    log "Rebasing branch $dependabot_branch onto current branch"
+
+    # Find commits on the Dependabot branch not on main
+    merge_base=$(git merge-base HEAD "origin/$pr_branch")
+    commits=$(git log --reverse --format="%H" "$merge_base..origin/$pr_branch")
+
+    if [ -z "$commits" ]; then
+        log "No new commits found in $pr_branch, skipping..."
+        continue
+    fi
+
+    log "Cherry-picking $pr_title"
     if [ "$dry_run" = false ]; then
-        if git rebase "$dependabot_branch"; then
-            log "Successfully rebased $pr_title"
+        pick_failed=false
+        while IFS= read -r commit; do
+            if ! git cherry-pick "$commit"; then
+                if handle_cherry_pick_conflicts "$pr_title"; then
+                    log "Successfully resolved conflicts for $pr_title"
+                else
+                    log "Skipped $pr_title due to conflicts"
+                    pick_failed=true
+                    break
+                fi
+            fi
+        done <<< "$commits"
+
+        if [ "$pick_failed" = false ]; then
+            log "Successfully cherry-picked $pr_title"
             echo "$pr" >> "$successful_prs_file"
         else
-            # Handle merge conflicts
-            if handle_merge_conflicts "$pr_branch" "$pr_title"; then
-                log "Successfully resolved conflicts and rebased $pr_title"
-                echo "$pr" >> "$successful_prs_file"
-            else
-                log "Skipped $pr_title due to conflicts"
-                echo "$pr" >> "$skipped_prs_file"
-            fi
+            echo "$pr" >> "$skipped_prs_file"
         fi
     else
-        log "Dry run: would rebase $pr_title"
+        log "Dry run: would cherry-pick $pr_title"
         echo "$pr" >> "$successful_prs_file"
     fi
 done <<< "$dependabot_prs"
@@ -257,33 +207,28 @@ successful_prs=$(cat "$successful_prs_file")
 skipped_prs=$(cat "$skipped_prs_file")
 rm "$successful_prs_file" "$skipped_prs_file"
 
-log "Rebasing origin/main onto current branch"
-if [ "$dry_run" = false ]; then
-    if git rebase origin/main; then
-        log "Successfully rebased origin/main onto $bump_deps_branch"
+if [ "$no_pr" = false ]; then
+    log "Rebasing origin/main onto $bump_deps_branch"
+    if [ "$dry_run" = false ]; then
+        git rebase origin/main || {
+            log "Rebase of origin/main failed - resolve conflicts manually and re-run"
+            exit 1
+        }
     else
-        # Handle merge conflicts for main branch rebase
-        if handle_main_rebase_conflicts; then
-            log "Successfully resolved main branch conflicts"
-        else
-            log "Skipped main branch rebase due to conflicts - continuing with current state"
-        fi
+        log "Dry run: would rebase origin/main onto current branch"
     fi
-else
-    log "Dry run: would rebase origin/main onto current branch"
-fi
 
-log "Pushing the bump-deps branch to origin"
-if [ "$dry_run" = false ]; then
-    git push origin "$bump_deps_branch" || {
-        log "Failed to push branch $bump_deps_branch"
-        exit 1
-    }
-fi
+    log "Pushing the $bump_deps_branch branch to origin"
+    if [ "$dry_run" = false ]; then
+        git push origin "$bump_deps_branch" || {
+            log "Failed to push branch $bump_deps_branch"
+            exit 1
+        }
+    fi
 
-pr_body="This PR includes the following Dependabot updates rebased into the $bump_deps_branch branch:
+    pr_body="This PR includes the following Dependabot updates:
 
-## Successfully Rebased PRs
+## Successfully Cherry-picked PRs
 $(echo "$successful_prs" | while IFS= read -r pr; do
     if [ -n "$pr" ]; then
         pr_title=$(echo "$pr" | jq -r '.title')
@@ -304,18 +249,27 @@ $(if [ -n "$skipped_prs" ]; then
 fi)
 "
 
-log "Creating a new PR"
+    log "Creating a new PR"
+    if [ "$dry_run" = false ]; then
+        pr_output=$(gh pr create --title "Bump dependencies - $timestamp" --body "$pr_body")
+        created_pr_url=$(echo "$pr_output" | grep -o 'https://github.com/[^ ]*')
+        log "Created PR: $created_pr_url"
+    fi
 
-if [ "$dry_run" = false ]; then
-    pr_output=$(gh pr create --title "Bump dependencies - $timestamp" --body "$pr_body")
-    created_pr_url=$(echo "$pr_output" | grep -o 'https://github.com/[^ ]*')
-    log "Created PR: $created_pr_url"
+    git checkout main
+
+    if [ "$delete_branch" = true ] && [ "$dry_run" = false ]; then
+        log "Deleting local branch $bump_deps_branch"
+        git branch -D "$bump_deps_branch" || {
+            log "Failed to delete branch $bump_deps_branch"
+            exit 1
+        }
+    fi
 fi
 
 if [ "$close_prs" = true ]; then
     echo "$dependabot_prs" | while IFS= read -r pr; do
         pr_number=$(echo "$pr" | jq -r '.number')
-        
         if [ "$dry_run" = false ]; then
             log "Closing PR $pr_number"
             gh pr close "$pr_number"
@@ -323,20 +277,6 @@ if [ "$close_prs" = true ]; then
             log "Dry run: would close PR $pr_number"
         fi
     done
-fi
-
-git checkout main
-
-if [ "$delete_branch" = true ]; then
-    log "Deleting local branch $bump_deps_branch"
-    if [ "$dry_run" = false ]; then
-        git branch -D "$bump_deps_branch" || {
-            log "Failed to delete branch $bump_deps_branch"
-            exit 1
-        }
-    else
-        log "Dry run: would delete local branch $bump_deps_branch"
-    fi
 fi
 
 # Generate final report
@@ -351,7 +291,7 @@ if [ -n "$skipped_prs" ]; then
 fi
 
 log "=== FINAL REPORT ==="
-log "Successfully rebased: $successful_count PRs"
+log "Successfully cherry-picked: $successful_count PRs"
 if [ "$skipped_count" -gt 0 ]; then
     log "Skipped due to conflicts: $skipped_count PRs"
 fi
